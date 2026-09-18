@@ -1,0 +1,28 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply m-0 bg-slate-50 font-sans text-slate-900 antialiased;
+    overflow-x: hidden;
+  }
+}
+
+@layer components {
+  .eyebrow {
+    @apply text-xs font-semibold uppercase tracking-[0.16em] text-teal-700;
+  }
+
+  .page-title {
+    @apply mt-2 text-2xl font-semibold tracking-tight text-slate-950 md:text-3xl;
+  }
+
+  .page-description {
+    @apply mt-2 text-sm text-slate-500;
+  }
+
+  .panel {
+    @apply rounded-xl border border-slate-200/80 bg-white/90 shadow-sm backdrop-blur-md;
+  }
+}
