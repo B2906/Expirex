@@ -9,6 +9,8 @@ import SectionHeader from '../components/SectionHeader'
 import ShipmentPreviewTable from '../components/ShipmentPreviewTable'
 import StatCard from '../components/StatCard'
 import { getDashboard, getHealth, getShipments } from '../services/api'
+import { buildSeverityPercentiles } from '../utils/severity'
+import { assessShipment } from '../utils/confidence'
 
 function affectedShipments(shipments) {
   return shipments
@@ -45,6 +47,11 @@ export default function Dashboard() {
   }, [])
 
   const preview = useMemo(() => affectedShipments(shipments), [shipments])
+  const severityPercentiles = useMemo(() => buildSeverityPercentiles(shipments.filter((shipment) => shipment.deviation_type)), [shipments])
+  const assessmentCounts = useMemo(() => shipments.map(assessShipment).reduce((counts, assessment) => {
+    counts[assessment.decisionAssessment] = (counts[assessment.decisionAssessment] || 0) + 1
+    return counts
+  }, {}), [shipments])
 
   if (loading) return <Loading label="Loading logistics overview" />
   if (error) return <ErrorState message={error} />
@@ -76,6 +83,15 @@ export default function Dashboard() {
         <StatCard label="Allocation Rate" value={allocationRate ?? 'Not available'} detail={decided ? `${decided} decided shipments` : 'No allocation decisions'} tone="teal" />
       </div>
 
+      <article className="panel p-5 md:p-6">
+        <SectionHeader eyebrow="Decision Assessment" title="Operational review signal" detail="Prototype policy: confidence ≥ 90% = recommended. This does not change persisted allocation status." />
+        <div className="grid gap-4 sm:grid-cols-3">
+          <StatCard label="Recommended" value={assessmentCounts.RECOMMENDED || 0} tone="teal" />
+          <StatCard label="Review Required" value={assessmentCounts['REVIEW REQUIRED'] || 0} tone="amber" />
+          <StatCard label="No viable / unavailable" value={(assessmentCounts['NO VIABLE RECOVERY'] || 0) + (assessmentCounts['CONFIDENCE UNAVAILABLE'] || 0)} tone="red" />
+        </div>
+      </article>
+
       <PipelineFlow />
 
       <div className="grid gap-6 lg:grid-cols-2">
@@ -96,7 +112,7 @@ export default function Dashboard() {
           detail="Shipments with persisted anomalies, decisions, or confidence results."
           action={<Link to="/shipments" className="text-sm font-semibold text-teal-700 hover:text-teal-800">View all shipments →</Link>}
         />
-        <ShipmentPreviewTable shipments={preview} />
+        <ShipmentPreviewTable shipments={preview} severityPercentiles={severityPercentiles} />
       </article>
 
       <nav aria-label="Quick actions" className="flex flex-wrap gap-3">

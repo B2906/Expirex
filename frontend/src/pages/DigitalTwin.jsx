@@ -7,6 +7,9 @@ import Loading from '../components/Loading'
 import SectionHeader from '../components/SectionHeader'
 import StatusBadge from '../components/StatusBadge'
 import { getHubs, getMisplaced, getRecovery, getRecoveryForShipment, getRoutes, getShipments } from '../services/api'
+import { buildSeverityPercentiles, rawSeverityLabel, severityPercentileLabel } from '../utils/severity'
+import { assessShipment } from '../utils/confidence'
+import { DecisionAssessmentBadge } from '../components/StatusBadge'
 
 function routeIds(value) {
   if (Array.isArray(value)) return value.map((item) => typeof item === 'object' ? item.route_id : item).filter(Boolean)
@@ -187,8 +190,11 @@ export default function DigitalTwin() {
   if (error) return <ErrorState message={error} />
 
   const selectedConfidence = selectedShipment?.confidence_percent_monte_carlo ?? selectedShipment?.confidence_percent
+  const selectedAllocationStatus = selectedShipment?.status ?? 'UNRESOLVED'
   const selectedAnomaly = selectedShipment?.deviation_type
+  const severityPercentile = buildSeverityPercentiles(shipments.filter((shipment) => shipment.deviation_type)).get(selectedId)
   const selectedPath = selected.assignment
+  const decision = assessShipment(selectedShipment || {})
 
   return (
     <section className="space-y-8">
@@ -327,9 +333,11 @@ export default function DigitalTwin() {
                   <Info label="Current hub" value={selected.current ?? '—'} />
                   <Info label="Destination" value={selected.destination ?? '—'} />
                   <Info label="Anomaly" value={selectedAnomaly ? selectedAnomaly.replaceAll('_', ' ') : 'No anomaly'} />
-                  <Info label="Severity" value={selectedShipment.severity_score ?? '—'} />
-                  <Info label="Status" value={<StatusBadge value={selectedShipment.status ?? selectedShipment.current_status} />} />
-                  <Info label="Confidence" value={selectedConfidence == null ? '—' : `${selectedConfidence}%`} />
+                  <Info label="Relative Severity Percentile" value={severityPercentileLabel(severityPercentile)} />
+                  <Info label="Raw Severity Score" value={rawSeverityLabel(selectedShipment.severity_score)} />
+                  <Info label="Allocation Status" value={<StatusBadge value={selectedAllocationStatus} />} />
+                  <Info label="Monte Carlo Confidence" value={selectedConfidence == null ? 'CONFIDENCE UNAVAILABLE' : `${selectedConfidence}%`} />
+                  <Info label="Assessment" value={<DecisionAssessmentBadge value={decision.decisionAssessment} />} />
                 </dl>
                 <Link to={`/shipments/${encodeURIComponent(selectedId)}`} className="mt-6 block text-sm font-semibold text-teal-700 hover:underline">
                   View Full Details →

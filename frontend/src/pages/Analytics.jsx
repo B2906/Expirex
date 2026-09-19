@@ -7,6 +7,8 @@ import SectionHeader from '../components/SectionHeader'
 import StatCard from '../components/StatCard'
 import StatusBadge from '../components/StatusBadge'
 import { getDashboard, getHealth, getMonteCarlo, getRecovery, getRoutes, getShipments } from '../services/api'
+import { buildSeverityPercentiles, rawSeverityLabel } from '../utils/severity'
+import { assessShipment } from '../utils/confidence'
 
 function number(value, digits = 0) {
   return value == null || Number.isNaN(Number(value)) ? '—' : Number(value).toFixed(digits)
@@ -87,6 +89,10 @@ export default function Analytics() {
 
   const anomalyCounts = dashboard?.anomaly_counts || {}
   const confidenceValues = monteCarlo.map((record) => numeric(record.confidence_percent)).filter((value) => value != null)
+  const assessmentCounts = useMemo(() => shipments.map(assessShipment).reduce((counts, assessment) => {
+    counts[assessment.decisionAssessment] = (counts[assessment.decisionAssessment] || 0) + 1
+    return counts
+  }, {}), [shipments])
   const affectedShipments = useMemo(
     () => shipments
       .filter((shipment) => shipment.deviation_type)
@@ -95,6 +101,8 @@ export default function Analytics() {
   )
   const priorityCounts = useMemo(() => countBy(shipments, (shipment) => shipment.priority), [shipments])
   const severityValues = affectedShipments.map((shipment) => numeric(shipment.severity_score)).filter((value) => value != null)
+  const severityPercentiles = useMemo(() => buildSeverityPercentiles(affectedShipments), [affectedShipments])
+  const percentileValues = affectedShipments.map((shipment) => severityPercentiles.get(shipment.shipment_id)).filter((value) => value != null)
   const routeUsage = useMemo(() => {
     const counts = new Map()
     recovery.forEach((path) => routeIds(path.path).forEach((routeId) => counts.set(routeId, (counts.get(routeId) || 0) + 1)))
@@ -150,6 +158,16 @@ export default function Analytics() {
         </article>
       </div>
 
+      <article className="panel p-5 md:p-6">
+        <SectionHeader eyebrow="Decision Assessment" title="Operational assessment breakdown" detail="Prototype policy: confidence ≥ 90% = recommended. Assessment is separate from persisted allocation status." />
+        <ProgressList entries={[
+          ['Recommended', assessmentCounts.RECOMMENDED || 0],
+          ['Review Required', assessmentCounts['REVIEW REQUIRED'] || 0],
+          ['No Viable Recovery', assessmentCounts['NO VIABLE RECOVERY'] || 0],
+          ['Confidence Unavailable', assessmentCounts['CONFIDENCE UNAVAILABLE'] || 0],
+        ]} />
+      </article>
+
       <div className="grid gap-6 xl:grid-cols-3">
         <article className="panel p-5 md:p-6">
           <SectionHeader eyebrow="Confidence" title="Monte Carlo bands" detail={`${confidenceValues.length} shipments with confidence data.`} />
@@ -168,12 +186,13 @@ export default function Analytics() {
 
       <div className="grid gap-6 xl:grid-cols-2">
         <article className="panel p-5 md:p-6">
-          <SectionHeader eyebrow="Severity" title="Observed severity range" detail="Numeric values are shown because the persisted data does not define official severity bands." />
-          {severityValues.length ? (
+          <SectionHeader eyebrow="Relative severity" title="Detected anomaly urgency" detail="Percentiles are presentation-only rankings derived from persisted raw severity values." />
+          {percentileValues.length ? (
             <div className="grid gap-4 sm:grid-cols-3">
-              <Summary label="Records" value={severityValues.length} />
-              <Summary label="Minimum" value={number(Math.min(...severityValues), 3)} />
-              <Summary label="Maximum" value={number(Math.max(...severityValues), 3)} />
+              <Summary label="Records" value={percentileValues.length} />
+              <Summary label="Lowest percentile" value={number(Math.min(...percentileValues), 1)} />
+              <Summary label="Highest percentile" value={number(Math.max(...percentileValues), 1)} />
+              <p className="text-xs text-slate-500 sm:col-span-3">Raw severity range: {rawSeverityLabel(Math.min(...severityValues))}–{rawSeverityLabel(Math.max(...severityValues))}</p>
             </div>
           ) : <EmptyChart message="No numeric severity records are available." />}
         </article>
@@ -184,19 +203,19 @@ export default function Analytics() {
       </div>
 
       <article className="panel p-5 md:p-6">
-        <SectionHeader eyebrow="Affected shipments" title="Highest observed severity" detail="Rows are sorted by persisted numeric severity, with missing values last." />
+        <SectionHeader eyebrow="Affected shipments" title="Highest relative severity percentile" detail="Rows are sorted by the presentation-only percentile; raw scores remain available for transparency." />
         {affectedShipments.length ? (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[680px] text-left text-sm">
               <thead className="border-b border-slate-200 text-xs uppercase tracking-[0.1em] text-slate-400">
-                <tr><th className="px-3 py-3 font-medium">Shipment ID</th><th className="px-3 py-3 font-medium">Anomaly</th><th className="px-3 py-3 font-medium">Severity</th><th className="px-3 py-3 font-medium">Status</th><th className="px-3 py-3 font-medium">Confidence</th></tr>
+                <tr><th className="px-3 py-3 font-medium">Shipment ID</th><th className="px-3 py-3 font-medium">Anomaly</th><th className="px-3 py-3 font-medium">Relative Severity Percentile</th><th className="px-3 py-3 font-medium">Status</th><th className="px-3 py-3 font-medium">Confidence</th></tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {affectedShipments.slice(0, 10).map((shipment) => (
                   <tr key={shipment.shipment_id} onClick={() => navigate(`/shipments/${encodeURIComponent(shipment.shipment_id)}`)} className="cursor-pointer transition hover:bg-teal-50/30">
                     <td className="px-3 py-3 font-semibold text-teal-700">{shipment.shipment_id}</td>
                     <td className="px-3 py-3 capitalize text-slate-600">{shipment.deviation_type.replaceAll('_', ' ')}</td>
-                    <td className="px-3 py-3 tabular text-slate-600">{shipment.severity_score ?? '—'}</td>
+                    <td className="px-3 py-3 tabular text-slate-600">{severityPercentiles.get(shipment.shipment_id) == null ? '—' : `${Math.round(severityPercentiles.get(shipment.shipment_id))} / 100`}<span className="block text-[10px] text-slate-400">raw {rawSeverityLabel(shipment.severity_score)}</span></td>
                     <td className="px-3 py-3"><StatusBadge value={shipment.status ?? shipment.current_status} /></td>
                     <td className="px-3 py-3 tabular text-slate-600">{shipment.confidence_percent_monte_carlo == null && shipment.confidence_percent == null ? '—' : `${number(shipment.confidence_percent_monte_carlo ?? shipment.confidence_percent, 1)}%`}</td>
                   </tr>

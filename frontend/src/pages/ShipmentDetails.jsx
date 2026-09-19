@@ -5,8 +5,10 @@ import ConfidenceIndicator from '../components/ConfidenceIndicator'
 import ErrorState from '../components/ErrorState'
 import Loading from '../components/Loading'
 import SectionHeader from '../components/SectionHeader'
-import StatusBadge from '../components/StatusBadge'
-import { getExplanation, getRecoveryForShipment, getShipment } from '../services/api'
+import StatusBadge, { DecisionAssessmentBadge } from '../components/StatusBadge'
+import { getExplanation, getMisplaced, getRecoveryForShipment, getShipment } from '../services/api'
+import { buildSeverityPercentiles, rawSeverityLabel, severityPercentileLabel } from '../utils/severity'
+import { assessRecoveryDecision, PROTOTYPE_CONFIDENCE_THRESHOLD } from '../utils/confidence'
 
 function display(value) {
   if (value == null || value === '') return '—'
@@ -23,6 +25,12 @@ function dateDisplay(value) {
   if (!value) return '—'
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? display(value) : date.toLocaleString()
+}
+
+function simulationDisplay(value) {
+  if (value == null || value === '') return '—'
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? numeric.toLocaleString() : display(value)
 }
 
 function routeIds(path) {
@@ -45,6 +53,7 @@ export default function ShipmentDetails() {
   const [data, setData] = useState(null)
   const [recovery, setRecovery] = useState(null)
   const [explanation, setExplanation] = useState(null)
+  const [anomalies, setAnomalies] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [notFound, setNotFound] = useState(false)
@@ -52,12 +61,13 @@ export default function ShipmentDetails() {
   useEffect(() => {
     let active = true
     setLoading(true)
-    Promise.all([getShipment(id), getRecoveryForShipment(id), getExplanation(id)])
-      .then(([shipment, recoveryResult, explanationResult]) => {
+    Promise.all([getShipment(id), getRecoveryForShipment(id), getExplanation(id), getMisplaced()])
+      .then(([shipment, recoveryResult, explanationResult, anomalyRecords]) => {
         if (!active) return
         setData(shipment)
         setRecovery(recoveryResult)
         setExplanation(explanationResult)
+        setAnomalies(Array.isArray(anomalyRecords) ? anomalyRecords : [])
       })
       .catch((requestError) => {
         if (!active) return
@@ -99,7 +109,10 @@ export default function ShipmentDetails() {
   const currentHub = anomaly.last_known_hub ?? shipment.current_hub
   const recoveryRoute = explanation?.recovery_route ?? assignment.selected_path
   const routePath = routeIds(recoveryRoute)
-  const status = assignment.status ?? shipment.current_status
+  const allocationStatus = assignment.status ?? 'UNRESOLVED'
+  const hasMonteCarlo = Object.keys(monteCarlo).length > 0
+  const severityPercentile = buildSeverityPercentiles(anomalies).get(id)
+  const decision = assessRecoveryDecision(allocationStatus, monteCarlo.confidence_percent)
 
   return (
     <section className="space-y-8">
@@ -113,7 +126,7 @@ export default function ShipmentDetails() {
           </div>
           <div className="flex items-center gap-2">
             <AnomalyBadge value={anomaly.deviation_type} />
-            <StatusBadge value={status} />
+            <StatusBadge value={allocationStatus} />
           </div>
         </div>
       </header>
@@ -144,7 +157,9 @@ export default function ShipmentDetails() {
           <SectionHeader eyebrow="Detection" title="Anomaly assessment" />
           <dl className="grid gap-5 sm:grid-cols-2 xl:grid-cols-1">
             <Detail label="Anomaly" value={<AnomalyBadge value={anomaly.deviation_type} />} />
-            <Detail label="Severity score" value={numberDisplay(anomaly.severity_score, 3)} />
+            <Detail label="Relative Severity Percentile" value={severityPercentileLabel(severityPercentile)} />
+            <p className="text-xs text-slate-500 sm:col-span-2">Relative urgency among detected anomalies</p>
+            <Detail label="Raw Severity Score" value={rawSeverityLabel(anomaly.severity_score)} />
             <Detail label="Time lost" value={display(explanation?.time_lost)} />
             <Detail label="Shipment status" value={<StatusBadge value={shipment.current_status} />} />
           </dl>
@@ -193,19 +208,37 @@ export default function ShipmentDetails() {
         <article className="panel p-5 md:p-6">
           <SectionHeader eyebrow="Monte Carlo" title="Recovery confidence" />
           <dl className="grid gap-5 sm:grid-cols-2">
-            <Detail label="Confidence" value={<ConfidenceIndicator value={monteCarlo.confidence_percent} />} />
-            <Detail label="Simulations" value={display(monteCarlo.simulations)} />
-            <Detail label="Successful" value={display(monteCarlo.successful)} />
-            <Detail label="Failed" value={display(monteCarlo.failed)} />
-            <Detail label="Average arrival" value={dateDisplay(monteCarlo.average_arrival)} />
-            <Detail label="Latest successful arrival" value={dateDisplay(monteCarlo.latest_successful_arrival)} />
+            <Detail label="Confidence" value={hasMonteCarlo ? <ConfidenceIndicator value={monteCarlo.confidence_percent} /> : 'CONFIDENCE UNAVAILABLE'} />
+            <Detail label="Simulations" value={simulationDisplay(monteCarlo.simulations)} />
+            <Detail label="Successful" value={simulationDisplay(monteCarlo.successful)} />
+            <Detail label="Failed" value={simulationDisplay(monteCarlo.failed)} />
+            <Detail label="Average arrival" value={hasMonteCarlo ? dateDisplay(monteCarlo.average_arrival) : 'Not available'} />
+            <Detail label="Latest successful arrival" value={hasMonteCarlo ? dateDisplay(monteCarlo.latest_successful_arrival) : 'Not available'} />
           </dl>
+          {!hasMonteCarlo && <p className="mt-5 text-xs leading-5 text-slate-500">No persisted Monte Carlo result is available for this shipment.</p>}
+        </article>
+        <article className="panel p-5 md:p-6">
+          <SectionHeader eyebrow="Recovery decision" title="Decision Assessment" detail="Prototype policy only; persisted allocation status is unchanged." />
+          <dl className="grid gap-5 sm:grid-cols-2">
+            <Detail label="Allocation Status" value={<StatusBadge value={allocationStatus} />} />
+            <Detail label="Monte Carlo Confidence" value={hasMonteCarlo ? <ConfidenceIndicator value={monteCarlo.confidence_percent} /> : 'CONFIDENCE UNAVAILABLE'} />
+            <Detail label="Decision Assessment" value={<DecisionAssessmentBadge value={decision.decisionAssessment} />} />
+            <Detail label="Simulations" value={simulationDisplay(monteCarlo.simulations)} />
+            <Detail label="Successful" value={simulationDisplay(monteCarlo.successful)} />
+            <Detail label="Failed" value={simulationDisplay(monteCarlo.failed)} />
+          </dl>
+          <p className="mt-5 text-xs leading-5 text-slate-500">Prototype Decision Policy: automatic recommendation requires confidence ≥ {PROTOTYPE_CONFIDENCE_THRESHOLD}%. Confidence is the observed proportion of successful persisted simulations, not a probability-of-delivery guarantee.</p>
+          {!hasMonteCarlo && <p className="mt-2 text-xs leading-5 text-slate-500">No persisted Monte Carlo result is available for this shipment.</p>}
         </article>
         <article className="panel p-5 md:p-6">
           <SectionHeader eyebrow="Explainability" title="Why this route was selected" />
           <p className="text-sm leading-7 text-slate-600">{explanation?.reason || 'No persisted explanation is available for this shipment.'}</p>
+          {anomaly.deviation_type && <p className="mt-4 text-sm leading-6 text-slate-600">Anomaly type: <span className="font-semibold">{anomaly.deviation_type}</span>.</p>}
+          {assignment.status && <p className="mt-2 text-sm leading-6 text-slate-600">Recovery path was allocated by the persisted allocation stage.</p>}
+          {decision.decisionAssessment === 'REVIEW REQUIRED' && <p className="mt-4 text-sm leading-6 text-amber-700">Recovery path was allocated by the persisted allocation stage, but its Monte Carlo confidence is below the prototype automatic-recommendation threshold, so human review is recommended.</p>}
           <dl className="mt-6 grid gap-5 sm:grid-cols-2">
-            <Detail label="Allocation status" value={<StatusBadge value={explanation?.allocation_status ?? status} />} />
+            <Detail label="Anomaly type" value={display(anomaly.deviation_type)} />
+            <Detail label="Allocation status" value={<StatusBadge value={allocationStatus} />} />
             <Detail label="Fallback used" value={assignment.fallback_used == null ? '—' : assignment.fallback_used ? 'Yes' : 'No'} />
           </dl>
         </article>

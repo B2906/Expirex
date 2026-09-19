@@ -6,6 +6,7 @@ import SectionHeader from '../components/SectionHeader'
 import ShipmentFilters from '../components/ShipmentFilters'
 import ShipmentTable from '../components/ShipmentTable'
 import { getShipments } from '../services/api'
+import { buildSeverityPercentiles } from '../utils/severity'
 
 const PAGE_SIZE = 20
 
@@ -92,6 +93,7 @@ export default function Shipments() {
 
   useEffect(() => setPage(1), [search, anomaly, status, priority, severity, sortKey, sortDirection])
 
+  const severityPercentiles = useMemo(() => buildSeverityPercentiles(shipments.filter(hasAnomaly)), [shipments])
   if (loading) return <Loading label="Loading shipments" />
   if (error) return <ErrorState message={error} />
 
@@ -149,7 +151,7 @@ export default function Shipments() {
           hasFilters={hasFilters}
         />
         {visibleShipments.length ? (
-          <ShipmentTable shipments={visibleShipments} sortKey={sortKey} sortDirection={sortDirection} onSort={handleSort} />
+          <ShipmentTable shipments={visibleShipments} severityPercentiles={severityPercentiles} sortKey={sortKey} sortDirection={sortDirection} onSort={handleSort} />
         ) : (
           <div className="p-10 text-center">
             <p className="text-sm font-medium text-slate-700">No shipments match your filters.</p>
